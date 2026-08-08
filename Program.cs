@@ -12,8 +12,7 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Configuración de Email / Brevo
-builder.Services.Configure<EmailOptions>(options =>
+builder.Services.Configure(options =>
 {
     options.BrevoApiKey =
         Environment.GetEnvironmentVariable("BREVO_API_KEY")
@@ -34,7 +33,6 @@ builder.Services.Configure<EmailOptions>(options =>
 
 builder.Services.AddHttpClient<IEmailService, EmailService>();
 
-// CORS
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("Frontend", policy =>
