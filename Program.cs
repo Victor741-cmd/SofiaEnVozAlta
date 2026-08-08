@@ -12,7 +12,8 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-builder.Services.Configure<EmailSettings>(options =>
+// Configuración de Email / Brevo
+builder.Services.Configure<EmailOptions>(options =>
 {
     options.BrevoApiKey =
         Environment.GetEnvironmentVariable("BREVO_API_KEY")
@@ -33,12 +34,16 @@ builder.Services.Configure<EmailSettings>(options =>
 
 builder.Services.AddHttpClient<IEmailService, EmailService>();
 
+// CORS
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("Frontend", policy =>
     {
         policy
-            .WithOrigins("http://localhost:5173")
+            .WithOrigins(
+                "http://localhost:5173",
+                "https://sofia-en-voz-alta-frontend.onrender.com"
+            )
             .AllowAnyHeader()
             .AllowAnyMethod();
     });
