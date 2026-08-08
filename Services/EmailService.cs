@@ -1,22 +1,27 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text;
-using MailKit.Net.Smtp;
-using MailKit.Security;
+using System.Text.Json;
 using Microsoft.Extensions.Options;
-using MimeKit;
 using SofiaEnVozAlta.Api.Models;
 
 namespace SofiaEnVozAlta.Api.Services;
 
 public sealed class EmailService : IEmailService
 {
+    private const string BrevoUrl =
+        "https://api.brevo.com/v3/smtp/email";
+
+    private readonly HttpClient _httpClient;
     private readonly EmailSettings _settings;
     private readonly ILogger<EmailService> _logger;
 
     public EmailService(
+        HttpClient httpClient,
         IOptions<EmailSettings> options,
         ILogger<EmailService> logger)
     {
+        _httpClient = httpClient;
         _settings = options.Value;
         _logger = logger;
     }
@@ -25,40 +30,12 @@ public sealed class EmailService : IEmailService
         ContactRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(_settings.SenderEmail))
-        {
-            throw new InvalidOperationException(
-                "EmailSettings:SenderEmail no está configurado.");
-        }
+        ValidateConfiguration();
 
-        if (string.IsNullOrWhiteSpace(_settings.AppPassword))
-        {
-            throw new InvalidOperationException(
-                "EmailSettings:AppPassword no está configurado.");
-        }
-
-        if (string.IsNullOrWhiteSpace(_settings.RecipientEmail))
-        {
-            throw new InvalidOperationException(
-                "EmailSettings:RecipientEmail no está configurado.");
-        }
-
-        var message = new MimeMessage();
-
-        message.From.Add(
-            new MailboxAddress(
-                _settings.SenderName,
-                _settings.SenderEmail));
-
-        message.To.Add(
-            MailboxAddress.Parse(_settings.RecipientEmail));
-
-        var businessName = string.IsNullOrWhiteSpace(request.Negocio)
-            ? "Sin nombre de negocio"
-            : request.Negocio.Trim();
-
-        message.Subject =
-            $"Nueva solicitud web - {businessName}";
+        var businessName =
+            string.IsNullOrWhiteSpace(request.Negocio)
+                ? "Sin nombre de negocio"
+                : request.Negocio.Trim();
 
         var responseChannel =
             request.Canal.Equals(
@@ -74,28 +51,152 @@ public sealed class EmailService : IEmailService
                 ? request.Whatsapp
                 : request.Correo;
 
-        var safeNombre =
+        var htmlContent = BuildHtml(
+            request,
+            responseChannel,
+            contactValue);
+
+        var payload = new
+        {
+            sender = new
+            {
+                name = _settings.SenderName,
+                email = _settings.SenderEmail
+            },
+
+            to = new[]
+            {
+                new
+                {
+                    email = _settings.RecipientEmail,
+                    name = "Sofía en Voz Alta"
+                }
+            },
+
+            subject =
+                $"Nueva solicitud web - {businessName}",
+
+            htmlContent,
+
+            replyTo =
+                request.Canal.Equals(
+                    "correo",
+                    StringComparison.OrdinalIgnoreCase)
+                &&
+                !string.IsNullOrWhiteSpace(request.Correo)
+                    ? new
+                    {
+                        email = request.Correo,
+                        name = request.Nombre
+                    }
+                    : null
+        };
+
+        var json =
+            JsonSerializer.Serialize(payload);
+
+        using var httpRequest =
+            new HttpRequestMessage(
+                HttpMethod.Post,
+                BrevoUrl);
+
+        httpRequest.Headers.Add(
+            "api-key",
+            _settings.BrevoApiKey);
+
+        httpRequest.Headers.Accept.Add(
+            new MediaTypeWithQualityHeaderValue(
+                "application/json"));
+
+        httpRequest.Content =
+            new StringContent(
+                json,
+                Encoding.UTF8,
+                "application/json");
+
+        _logger.LogInformation(
+            "Enviando correo mediante Brevo API...");
+
+        using var response =
+            await _httpClient.SendAsync(
+                httpRequest,
+                cancellationToken);
+
+        var responseContent =
+            await response.Content.ReadAsStringAsync(
+                cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.LogError(
+                "Brevo respondió {StatusCode}: {Response}",
+                response.StatusCode,
+                responseContent);
+
+            throw new InvalidOperationException(
+                $"Brevo respondió con código " +
+                $"{(int)response.StatusCode}: " +
+                $"{responseContent}");
+        }
+
+        _logger.LogInformation(
+            "Correo enviado correctamente mediante Brevo. {Response}",
+            responseContent);
+    }
+
+    private void ValidateConfiguration()
+    {
+        if (string.IsNullOrWhiteSpace(
+                _settings.BrevoApiKey))
+        {
+            throw new InvalidOperationException(
+                "BREVO_API_KEY no está configurada.");
+        }
+
+        if (string.IsNullOrWhiteSpace(
+                _settings.SenderEmail))
+        {
+            throw new InvalidOperationException(
+                "EMAIL_SENDER_EMAIL no está configurado.");
+        }
+
+        if (string.IsNullOrWhiteSpace(
+                _settings.RecipientEmail))
+        {
+            throw new InvalidOperationException(
+                "EMAIL_RECIPIENT no está configurado.");
+        }
+    }
+
+    private static string BuildHtml(
+        ContactRequest request,
+        string responseChannel,
+        string? contactValue)
+    {
+        var nombre =
             Encode(request.Nombre);
 
-        var safeNegocio =
+        var negocio =
             Encode(
-                string.IsNullOrWhiteSpace(request.Negocio)
+                string.IsNullOrWhiteSpace(
+                    request.Negocio)
                     ? "No especificado"
                     : request.Negocio);
 
-        var safeSituacion =
+        var situacion =
             Encode(request.Situacion)
-                .Replace(
-                    "\n",
-                    "<br>");
+                .Replace("\r\n", "<br>")
+                .Replace("\n", "<br>");
 
-        var safeResponseChannel =
+        var canal =
             Encode(responseChannel);
 
-        var safeContactValue =
-            Encode(contactValue ?? string.Empty);
+        var contacto =
+            Encode(
+                contactValue ??
+                "No especificado");
 
-        var html = $"""
+        return $"""
 <!doctype html>
 <html lang="es">
 <head>
@@ -116,141 +217,73 @@ public sealed class EmailService : IEmailService
     ">
         <div style="
             background:#ffffff;
-            border-radius:16px;
+            border-radius:18px;
             padding:32px;
+            border:1px solid #eee4eb;
         ">
-            <h2 style="
-                margin-top:0;
-                margin-bottom:24px;
-                color:#5b0d4f;
-                font-size:24px;
+
+            <div style="
+                font-size:13px;
+                font-weight:700;
+                text-transform:uppercase;
+                letter-spacing:1px;
+                color:#8a5c7f;
+                margin-bottom:10px;
             ">
-                Nueva solicitud desde Sofía en Voz Alta
-            </h2>
+                Nueva solicitud web
+            </div>
 
-            <p style="margin-bottom:20px;">
-                <strong>Nombre:</strong>
+            <h1 style="
+                margin:0 0 28px 0;
+                color:#5b0d4f;
+                font-size:26px;
+            ">
+                Sofía en Voz Alta
+            </h1>
+
+            <p>
+                <strong>Nombre</strong>
                 <br>
-                {safeNombre}
+                {nombre}
             </p>
 
-            <p style="margin-bottom:20px;">
-                <strong>Negocio:</strong>
+            <p>
+                <strong>Negocio</strong>
                 <br>
-                {safeNegocio}
+                {negocio}
             </p>
 
-            <p style="margin-bottom:20px;">
+            <p>
                 <strong>¿Qué está pasando?</strong>
                 <br>
-                {safeSituacion}
+                {situacion}
             </p>
 
-            <p style="margin-bottom:20px;">
-                <strong>Prefiere recibir respuesta por:</strong>
+            <p>
+                <strong>
+                    Prefiere recibir respuesta por
+                </strong>
                 <br>
-                {safeResponseChannel}
+                {canal}
             </p>
 
-            <p style="margin-bottom:0;">
-                <strong>Dato de contacto:</strong>
+            <p>
+                <strong>Dato de contacto</strong>
                 <br>
-                {safeContactValue}
+                {contacto}
             </p>
+
         </div>
     </div>
 </body>
 </html>
 """;
-
-        var text = new StringBuilder()
-            .AppendLine("Nueva solicitud desde Sofía en Voz Alta")
-            .AppendLine()
-            .AppendLine($"Nombre: {request.Nombre}")
-            .AppendLine(
-                $"Negocio: {
-                    (string.IsNullOrWhiteSpace(request.Negocio)
-                        ? "No especificado"
-                        : request.Negocio)
-                }")
-            .AppendLine()
-            .AppendLine("¿Qué está pasando?")
-            .AppendLine(request.Situacion)
-            .AppendLine()
-            .AppendLine(
-                $"Prefiere recibir respuesta por: {responseChannel}")
-            .AppendLine(
-                $"Dato de contacto: {contactValue}")
-            .ToString();
-
-        var bodyBuilder = new BodyBuilder
-        {
-            HtmlBody = html,
-            TextBody = text
-        };
-
-        message.Body =
-            bodyBuilder.ToMessageBody();
-
-        using var client =
-            new SmtpClient();
-
-        /*
-         * En algunas redes corporativas/VPN,
-         * la validación de revocación OCSP/CRL
-         * no puede completarse.
-         *
-         * Esto NO desactiva la validación TLS.
-         * Solo evita que falle por una comprobación
-         * de revocación incompleta.
-         */
-        client.CheckCertificateRevocation = false;
-
-        var socketOptions =
-            _settings.UseStartTls
-                ? SecureSocketOptions.StartTls
-                : SecureSocketOptions.Auto;
-
-        _logger.LogInformation(
-            "Conectando a SMTP {Host}:{Port}",
-            _settings.SmtpHost,
-            _settings.SmtpPort);
-
-        await client.ConnectAsync(
-            _settings.SmtpHost,
-            _settings.SmtpPort,
-            socketOptions,
-            cancellationToken);
-
-        _logger.LogInformation(
-            "Conexión SMTP establecida. Autenticando como {SenderEmail}",
-            _settings.SenderEmail);
-
-        await client.AuthenticateAsync(
-            _settings.SenderEmail,
-            _settings.AppPassword,
-            cancellationToken);
-
-        _logger.LogInformation(
-            "Autenticación SMTP exitosa. Enviando correo a {RecipientEmail}",
-            _settings.RecipientEmail);
-
-        await client.SendAsync(
-            message,
-            cancellationToken);
-
-        await client.DisconnectAsync(
-            true,
-            cancellationToken);
-
-        _logger.LogInformation(
-            "Formulario enviado correctamente a {RecipientEmail}",
-            _settings.RecipientEmail);
     }
 
     private static string Encode(
         string value)
     {
-        return WebUtility.HtmlEncode(value);
+        return WebUtility.HtmlEncode(
+            value);
     }
 }
