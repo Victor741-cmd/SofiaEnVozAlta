@@ -14,23 +14,9 @@ builder.Services.AddSwaggerGen();
 
 builder.Services.Configure<EmailSettings>(options =>
 {
-    options.SmtpHost =
-        Environment.GetEnvironmentVariable("EMAIL_SMTP_HOST")
-        ?? "smtp.gmail.com";
-
-    options.SmtpPort =
-        int.TryParse(
-            Environment.GetEnvironmentVariable("EMAIL_SMTP_PORT"),
-            out var smtpPort)
-            ? smtpPort
-            : 587;
-
-    options.UseStartTls =
-        bool.TryParse(
-            Environment.GetEnvironmentVariable("EMAIL_USE_STARTTLS"),
-            out var useStartTls)
-            ? useStartTls
-            : true;
+    options.BrevoApiKey =
+        Environment.GetEnvironmentVariable("BREVO_API_KEY")
+        ?? string.Empty;
 
     options.SenderName =
         Environment.GetEnvironmentVariable("EMAIL_SENDER_NAME")
@@ -40,16 +26,12 @@ builder.Services.Configure<EmailSettings>(options =>
         Environment.GetEnvironmentVariable("EMAIL_SENDER_EMAIL")
         ?? string.Empty;
 
-    options.AppPassword =
-        Environment.GetEnvironmentVariable("EMAIL_APP_PASSWORD")
-        ?? string.Empty;
-
     options.RecipientEmail =
         Environment.GetEnvironmentVariable("EMAIL_RECIPIENT")
-        ?? "sofiaenvozalta@gmail.com";
+        ?? string.Empty;
 });
 
-builder.Services.AddScoped<IEmailService, EmailService>();
+builder.Services.AddHttpClient<IEmailService, EmailService>();
 
 builder.Services.AddCors(options =>
 {
