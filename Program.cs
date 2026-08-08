@@ -12,7 +12,7 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-builder.Services.Configure(options =>
+builder.Services.Configure<EmailSettings>(options =>
 {
     options.BrevoApiKey =
         Environment.GetEnvironmentVariable("BREVO_API_KEY")
