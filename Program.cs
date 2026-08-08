@@ -1,7 +1,10 @@
 using DotNetEnv;
 using SofiaEnVozAlta.Api.Services;
 
-Env.Load();
+if (File.Exists(".env"))
+{
+    Env.Load();
+}
 
 var builder = WebApplication.CreateBuilder(args);
 
